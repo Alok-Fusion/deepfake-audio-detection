@@ -1,0 +1,50 @@
+{
+  "timestamp": "2025-09-22T23:47:34.303481",
+  "n_files_total": 20000,
+  "n_features": 40,
+  "test_size": 0.2,
+  "random_state": 42,
+  "n_estimators": 200,
+  "class_weight": "balanced",
+  "accuracy": 0.683,
+  "confusion_matrix": [
+    [
+      1387,
+      613
+    ],
+    [
+      655,
+      1345
+    ]
+  ],
+  "classification_report": {
+    "0": {
+      "precision": 0.6792360430950048,
+      "recall": 0.6935,
+      "f1-score": 0.686293913904008,
+      "support": 2000.0
+    },
+    "1": {
+      "precision": 0.6869254341164454,
+      "recall": 0.6725,
+      "f1-score": 0.6796361798888327,
+      "support": 2000.0
+    },
+    "accuracy": 0.683,
+    "macro avg": {
+      "precision": 0.6830807386057252,
+      "recall": 0.683,
+      "f1-score": 0.6829650468964203,
+      "support": 4000.0
+    },
+    "weighted avg": {
+      "precision": 0.6830807386057252,
+      "recall": 0.683,
+      "f1-score": 0.6829650468964202,
+      "support": 4000.0
+    }
+  },
+  "failed_files_count": 0,
+  "failed_files_sample": [],
+  "feature_importances_csv": "models\\feature_importances.csv"
+}

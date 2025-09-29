@@ -1,0 +1,204 @@
+Save the text below into a file named **readme.txt** at your project root.
+
+```
+README — Audio Deepfake Detection (Text)
+
+Project purpose
+---------------
+This project is a local, Python-based audio deepfake detector. It supports two classifier types:
+  - RandomForest (RF) trained on MFCC features (fast, lightweight)
+  - CNN trained on log-mel spectrograms (higher accuracy potential)
+
+The desktop GUI allows you to:
+  - train the RF model from folders data/real and data/fake
+  - (separately) train a CNN on spectrograms
+  - run single-file predictions with waveform + mel-spectrogram visualizations
+  - show both prob_real and prob_fake and keep a prediction history
+  - run BOTH RF and CNN on one file, display side-by-side visuals and a comparison summary
+  - save prediction history to CSV
+
+This project was developed/tested with Python 3.10.8.
+
+Repository layout
+-----------------
+Place these files/folders in the project root:
+
+  audio-detection/
+  ├── features.py               # audio loading + MFCC extraction helpers
+  ├── train.py                  # RF training script
+  ├── gui_detailed.py           # GUI: RF + CNN, Run Both, colored history
+  ├── cnn_data.py               # CNN data generator (mel spectrograms)
+  ├── cnn_train.py              # CNN training script
+  ├── cnn_predict.py            # CNN inference helper
+  ├── compute_threshold.py      # optional: compute best threshold via ROC
+  ├── predict.py                # optional CLI predictor
+  ├── requirements.txt          # pip dependencies
+  ├── readme.txt                # this file
+  ├── data/
+  │   ├── real/                 # put real audio files here (.wav/.mp3/...)
+  │   └── fake/                 # put fake audio files here
+  ├── models/
+  │   ├── rf_model.joblib
+  │   ├── cnn_audio_fake_detector.h5
+  │   ├── cnn_meta.joblib
+  │   ├── metrics.json
+  │   └── feature_importances.csv
+  └── images/
+      └── ai.png                # optional GUI icon
+
+Quick setup — Windows
+---------------------
+1. Open PowerShell and cd into the project folder:
+   cd C:\Users\ak500\OneDrive\Desktop\IT\audio-detection
+
+2. Create & activate virtual environment:
+   python -m venv venv
+   .\venv\Scripts\activate
+
+3. Upgrade packaging tools:
+   pip install --upgrade pip setuptools wheel
+
+4. (Windows tip) If librosa fails to install, install these first:
+   pip install numba llvmlite
+
+5. Install dependencies:
+   pip install -r requirements.txt
+
+6. (Optional) Install TensorFlow for CNN:
+   pip install tensorflow
+   (pick CPU or GPU build suitable for your machine)
+
+Quick setup — macOS / Linux
+--------------------------
+1. Open terminal and cd to project folder:
+   cd /path/to/audio-detection
+
+2. Create & activate venv:
+   python3 -m venv venv
+   source venv/bin/activate
+
+3. Upgrade tooling:
+   pip install --upgrade pip setuptools wheel
+
+4. Install dependencies:
+   pip install -r requirements.txt
+
+5. (Optional) Install TensorFlow:
+   pip install tensorflow
+
+Train the RandomForest model (RF)
+---------------------------------
+From project root, run:
+  python train.py
+
+That script:
+  - reads audio under data/real and data/fake
+  - extracts MFCC features
+  - scales features with StandardScaler
+  - trains RandomForestClassifier
+  - saves models/rf_model.joblib, models/metrics.json, models/feature_importances.csv
+
+Train the CNN (spectrogram-based)
+---------------------------------
+From project root, run:
+  python cnn_train.py --epochs 20 --batch-size 16 --lr 1e-3
+
+Outputs:
+  - models/cnn_audio_fake_detector.h5 (best checkpoint)
+  - models/cnn_audio_fake_detector_final.h5 (final saved model)
+  - models/cnn_meta.joblib (specs used)
+  - models/cnn_training_log.csv
+
+Notes:
+  - Use batch size 8–16 on CPU. Use GPU for faster training.
+  - CNN expects consistent sampling rate and duration (scripts use SR=22050, duration=5s by default).
+
+Run the GUI
+-----------
+Start the GUI:
+  python gui_detailed.py
+
+GUI features:
+  - Model selector: Auto / RandomForest / CNN (Auto prefers RF if available)
+  - Predict (Single): run the selected model on one file
+  - Run Both: executes RF + CNN and shows:
+      * RF visuals (left column): waveform + mel-spectrogram
+      * CNN visuals (right column): waveform + mel-spectrogram
+      * Comparison panel summarizing prob_real, prob_fake, agreement and probability delta
+  - Threshold slider: decides how high prob_fake must be to label file Fake (default 0.50)
+  - Colored history: RF rows look blue-ish, CNN green-ish, Both purple-ish
+  - Play audio (optional): requires simpleaudio
+  - Train RF button runs RF training in background (CNN training is separate)
+
+Important: probability mapping
+-----------------------------
+Different classifiers may store class ordering in model.classes_. The GUI computes
+prob_real and prob_fake robustly:
+  - RF: finds index of class 0 (fake) and class 1 (real) in model.classes_ and uses those columns
+  - CNN: model outputs sigmoid(prob_real); prob_fake = 1 - prob_real
+
+If you read predict_proba manually anywhere, ensure you use the column that corresponds to the class label.
+
+Compute recommended threshold (optional)
+----------------------------------------
+To compute an operating threshold (Youden’s J on ROC), run:
+  python compute_threshold.py
+
+That script will print a recommended threshold (often better than an arbitrary 0.86 or 0.5).
+
+Common problems & troubleshooting
+---------------------------------
+1) "mfcc() takes 0 positional arguments..."  
+   - You may have a local file shadowing the librosa package (e.g., a file named librosa.py). Remove/rename it.
+
+2) "TypeError: fit() got an unexpected keyword argument 'workers'"  
+   - Some TF/Keras installs do not accept workers/use_multiprocessing in model.fit(); the provided cnn_train.py avoids those kwargs.
+
+3) Audio loading fails for many files  
+   - Test single file reading:
+       from features import safe_read_audio
+       y,sr = safe_read_audio("data/real/somefile.wav")
+       print(y is not None, sr)
+   - Ensure soundfile and audioread/ffmpeg are available. On Windows, try moving project out of OneDrive if you see file-lock issues.
+
+4) Model predicts "Real" for many fakes  
+   - Check models/metrics.json for confusion matrix and overall performance.
+   - Run the batch evaluation script (batch_eval.py) to measure false negative counts.
+   - Improve features (delta MFCCs, chroma, spectral contrast), augment data, increase dataset size, or use CNN / pretrained audio embeddings.
+
+File formats supported
+---------------------
+Supported audio extensions: .wav, .mp3, .flac, .ogg, .m4a.
+Loader prefers soundfile and falls back to librosa/audioread.
+
+Where outputs are stored
+------------------------
+  - RF model & scaler: models/rf_model.joblib
+  - CNN model: models/cnn_audio_fake_detector.h5
+  - CNN metadata: models/cnn_meta.joblib
+  - Training metrics: models/metrics.json
+  - Feature importances: models/feature_importances.csv
+  - Prediction history: saved by GUI to a CSV file you choose
+
+Performance & tuning tips
+-------------------------
+  - Use GPU for CNN training if available.
+  - Reduce batch_size (8–16) when training on CPU.
+  - Precompute spectrograms as .npz files for faster iteration if you have a very large dataset.
+  - Consider ensembling RF + CNN (average probabilities or majority vote) for more robust predictions.
+  - Consider calibration (Platt scaling) to make classifier probabilities more reliable.
+
+Optional enhancements (ideas you can ask me to add)
+---------------------------------------------------
+  - Add a GUI "Train CNN" button (runs cnn_train.py in background)
+  - Make history rows clickable to replay visuals and comparison
+  - Color-code agreement vs conflict badges in history (agreement = green badge; conflict = red)
+  - Batch-run both models on an entire folder and export RF & CNN probabilities as CSV
+  - Replace CNN with transfer-learning using pretrained PANNs / YAMNet embeddings
+
+License & contact
+-----------------
+This code is provided as-is for research / prototyping. If you want a license file (MIT/Apache), tell me which license and I will add it.
+
+If you want a README in Markdown (README.md) with screenshots for GitHub, or if you want any of the optional enhancements above implemented, tell me which and I will add them into the project files.
+```
