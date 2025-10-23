@@ -1,34 +1,65 @@
-# core - audio + numeric
-numpy>=1.23.5
-scipy>=1.9.3
-librosa>=0.9.2
-soundfile>=0.11.0
-numba>=0.55.2          # helps librosa on Windows (install before librosa if needed)
-llvmlite>=0.39.1       # often required alongside numba
+# =========================
+# requirements.txt (cleaned)
+# =========================
+#
+# - This file is suitable for running the Flask web app (app_flask.py).
+# - Desktop-only GUI packages are listed under [OPTIONAL / DESKTOP].
+# - TensorFlow is commented out (heavy; install only when training CNN locally).
+#
+# IMPORTANT:
+# - For consistent deploys on Render / Heroku, pin a Python version (e.g. runtime.txt -> python-3.10.8).
+# - Keep TensorFlow out of the cloud deploy unless you know the target host supports it.
 
-# ML
-scikit-learn>=1.1.3
+# -------------------------
+# Core numeric & audio libs
+# Only include versions known to be compatible with Python 3.10/3.11.
+numpy>=1.23.5,<2.0
+scipy>=1.9.3,<2.0
+librosa>=0.9.2,<0.13
+soundfile>=0.11.0
+
+# numba/llvmlite are helpful on Windows for librosa performance; include if you need them locally
+numba>=0.55.2; platform_system == "Windows"
+llvmlite>=0.39.1; platform_system == "Windows"
+
+# -------------------------
+# Machine learning
+scikit-learn>=1.1.3,<1.3
 joblib>=1.2.0
 
-# GUI & plotting
-customtkinter>=6.0.0
+# -------------------------
+# Web / server
+Flask>=2.0
+gunicorn>=20.0
+
+# -------------------------
+# Plotting & visualization
+matplotlib>=3.5.2,<4.0
 pillow>=9.0.0
-matplotlib>=3.5.2
 
-# audio playback (optional)
-simpleaudio>=1.0.4
-
-# utilities
+# -------------------------
+# Utilities
 tqdm>=4.64.0
-
-# optional (for CSV/analysis)
 pandas>=1.5.0
 
-# ----------------------------------------------------------------------
-# Optional: TensorFlow for CNN training (install only if you plan to train or run CNN)
-# NOTE: choose a TF build appropriate for your platform (CPU/GPU).
+# -------------------------
+# Optional audio playback (only needed for local desktop playback)
+simpleaudio>=1.0.4 ; platform_system != "Linux"
+
+# -------------------------
+# OPTIONAL / DESKTOP GUI (only for local desktop apps)
+# If you are running the CTk desktop GUI locally (not on a web host), uncomment the line below.
+# customtkinter is not required for the Flask web app and can cause deploy issues on PaaS.
+# customtkinter>=5.2.2
+
+# -------------------------
+# OPTIONAL / CNN (only if you plan to train or run the CNN locally)
+# TensorFlow is large and often incompatible with small/free cloud hosts.
+# Install manually on the machines where you train/run the CNN.
 # Example (CPU): pip install tensorflow==2.12.0
-# Example (GPU): install tensorflow that matches your CUDA/cuDNN setup.
-# Uncomment the next line if you want TF installed via requirements.txt:
+# Uncomment below only if you *need* TF on this environment:
 # tensorflow==2.12.0
-# ----------------------------------------------------------------------
+
+# =========================
+# End of requirements.txt
+# =========================
