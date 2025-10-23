@@ -35,3 +35,4 @@ ffmpeg-python>=0.2.0
 # ---- Notes ----
 # Omit customtkinter/simpleaudio because Render (web) can't use desktop GUIs.
 # This set uses only wheel-compatible packages for Python 3.10–3.11.
+gunicorn==20.1.0
