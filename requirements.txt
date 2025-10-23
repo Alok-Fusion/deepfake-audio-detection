@@ -1,17 +1,34 @@
-numpy==1.23.5
-scipy==1.9.3
-librosa==0.9.2
-soundfile==0.11.0
-numba==0.55.2
-llvmlite==0.39.1
+# core - audio + numeric
+numpy>=1.23.5
+scipy>=1.9.3
+librosa>=0.9.2
+soundfile>=0.11.0
+numba>=0.55.2          # helps librosa on Windows (install before librosa if needed)
+llvmlite>=0.39.1       # often required alongside numba
 
-scikit-learn==1.1.3
-joblib==1.2.0
-flask==2.2.5
-gunicorn==20.1.0
+# ML
+scikit-learn>=1.1.3
+joblib>=1.2.0
 
-matplotlib==3.5.2
-pillow==9.0.0
+# GUI & plotting
+customtkinter>=6.0.0
+pillow>=9.0.0
+matplotlib>=3.5.2
 
-tqdm==4.64.0
-pandas==1.5.0
+# audio playback (optional)
+simpleaudio>=1.0.4
+
+# utilities
+tqdm>=4.64.0
+
+# optional (for CSV/analysis)
+pandas>=1.5.0
+
+# ----------------------------------------------------------------------
+# Optional: TensorFlow for CNN training (install only if you plan to train or run CNN)
+# NOTE: choose a TF build appropriate for your platform (CPU/GPU).
+# Example (CPU): pip install tensorflow==2.12.0
+# Example (GPU): install tensorflow that matches your CUDA/cuDNN setup.
+# Uncomment the next line if you want TF installed via requirements.txt:
+# tensorflow==2.12.0
+# ----------------------------------------------------------------------
