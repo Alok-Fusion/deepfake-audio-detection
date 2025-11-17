@@ -23,7 +23,7 @@ tqdm>=4.64.0
 
 # optional (for CSV/analysis)
 pandas>=1.5.0
-
+streamlit>=1.24.0
 # ----------------------------------------------------------------------
 # Optional: TensorFlow for CNN training (install only if you plan to train or run CNN)
 # NOTE: choose a TF build appropriate for your platform (CPU/GPU).
