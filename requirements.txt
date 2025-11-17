@@ -16,7 +16,7 @@ pillow>=9.0.0
 matplotlib>=3.5.2
 
 # audio playback (optional)
-simpleaudio>=1.0.4
+# simpleaudio>=1.0.4
 
 # utilities
 tqdm>=4.64.0
