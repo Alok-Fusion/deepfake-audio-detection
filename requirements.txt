@@ -32,4 +32,3 @@ streamlit>=1.24.0
 # Uncomment the next line if you want TF installed via requirements.txt:
 # tensorflow==2.12.0
 # ----------------------------------------------------------------------
-tensorflow==2.12.0
