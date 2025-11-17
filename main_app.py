@@ -47,30 +47,295 @@ except Exception as e:
 else:
     features_import_error = None
 
-# optional: cnn/ensemble helpers if present in your repo
 # -------------------------
-# CNN import handler (with error capture)
+# CNN import handler (with error capture) + internal fallback loader
 # -------------------------
 cnn_import_error = None
+load_cnn_fn = None
+predict_cnn_file = None
+CNN_AVAILABLE = False
+cnn_meta = None  # placeholder for metadata (if any)
+
+# First try to import a local cnn_predict.py if present (preferred)
 try:
-    from cnn_predict import load_cnn as load_cnn_fn
-    from cnn_predict import predict_file as predict_cnn_file
+    # prefer project-provided helper if it exists
+    from cnn_predict import load_cnn as load_cnn_fn  # type: ignore
+    from cnn_predict import predict_file as predict_cnn_file  # type: ignore
     CNN_AVAILABLE = True
-except Exception as e:
+except Exception:
+    # remember traceback for debug UI
+    cnn_import_error = traceback.format_exc()
     load_cnn_fn = None
     predict_cnn_file = None
     CNN_AVAILABLE = False
-    import traceback
-    cnn_import_error = traceback.format_exc()
 
-try:
-    from ensemble_predict import load_ensemble as load_ensemble_fn
-    from ensemble_predict import predict_file as predict_ensemble_file
-    ENSEMBLE_AVAILABLE = True
-except Exception:
-    load_ensemble_fn = None
-    predict_ensemble_file = None
-    ENSEMBLE_AVAILABLE = False
+# If no cnn_predict helper, provide an internal fallback using tensorflow.keras (if available)
+if not CNN_AVAILABLE:
+    try:
+        # attempt to import tensorflow (this may fail on Streamlit cloud if not in requirements)
+        import tensorflow as tf  # type: ignore
+        from tensorflow.keras.models import load_model as keras_load_model  # type: ignore
+
+        # internal loader: tries several filenames that exist in your models/ folder
+        def _find_cnn_model_file():
+            candidates = [
+                "models/cnn_audio_fake_detector_final.h5",
+                "models/cnn_audio_fake_detector.h5",
+                "models/cnn_model.h5",
+                "models/cnn.h5",
+            ]
+            for p in candidates:
+                if os.path.exists(p):
+                    return p
+            # fall back: find any .h5 in models dir
+            models_dir = "models"
+            if os.path.isdir(models_dir):
+                for fname in os.listdir(models_dir):
+                    if fname.lower().endswith(".h5"):
+                        return os.path.join(models_dir, fname)
+            return None
+
+        def load_cnn_internal():
+            """
+            Loads a Keras model from a guessed filename and optional meta (joblib).
+            Returns (model, meta_dict)
+            """
+            model_path = _find_cnn_model_file()
+            meta = {}
+            if model_path is None:
+                raise FileNotFoundError("No .h5 CNN model file found in models/ (tried common names).")
+
+            # attempt to load metadata if present
+            meta_path = "models/cnn_meta.joblib"
+            if os.path.exists(meta_path):
+                try:
+                    meta = joblib.load(meta_path)
+                except Exception:
+                    meta = {}
+
+            # load model (may raise if TF not present)
+            model = keras_load_model(model_path, compile=False)
+            return model, meta
+
+        def _make_mel_spectrogram(y, sr, n_mels=128, fmax=8000):
+            import librosa
+            # Compute mel spectrogram (power)
+            S = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=n_mels, fmax=fmax)
+            S_db = librosa.power_to_db(S, ref=np.max)
+            return S_db  # shape: (n_mels, t)
+
+        def _adapt_spectrogram_to_model_input(S_db, model):
+            """
+            Given 2D spectrogram S_db (n_mels, t), adapt to model.input_shape:
+            - if model expects (None, h, w, c): pad/trim t to w and possibly n_mels -> h.
+            - if model expects (None, h, w): similar
+            - returns array with batch dim ready for model.predict
+            """
+            # get target shape from model input
+            input_shape = None
+            try:
+                input_shape = model.input_shape  # e.g. (None, 128, 128, 1)
+            except Exception:
+                input_shape = None
+
+            # default: try to make shape (1, n_mels, t, 1)
+            arr = S_db.astype(np.float32)
+            # normalize to [-1,1] or 0-1? keep as dB but scale
+            # simple normalization: min-max to [0,1]
+            arr = arr - arr.min()
+            if arr.max() > 0:
+                arr = arr / arr.max()
+            # Now adapt dims
+            if input_shape is None:
+                # fallback: add batch + channel
+                return np.expand_dims(np.expand_dims(arr, 0), -1)  # (1, n_mels, t, 1)
+
+            # remove batch dim
+            target_shape = list(input_shape)[1:]
+            # cases:
+            # (h, w, c)  -> conv2d expecting channels-last
+            # (h, w)     -> conv2d without channel?
+            # if len==3 and last==1 or 3 assume channels last
+            if len(target_shape) == 3:
+                h_target, w_target, c_target = target_shape
+                h_cur, w_cur = arr.shape
+                # adjust h (n_mels) -> h_target
+                if h_cur < h_target:
+                    pad_top = (h_target - h_cur) // 2
+                    pad_bottom = h_target - h_cur - pad_top
+                    arr = np.pad(arr, ((pad_top, pad_bottom), (0, 0)), mode="constant")
+                elif h_cur > h_target:
+                    # crop center
+                    start = (h_cur - h_target) // 2
+                    arr = arr[start : start + h_target, :]
+
+                # adjust w (time) -> w_target
+                h_cur, w_cur = arr.shape
+                if w_cur < w_target:
+                    pad_left = (w_target - w_cur) // 2
+                    pad_right = w_target - w_cur - pad_left
+                    arr = np.pad(arr, ((0, 0), (pad_left, pad_right)), mode="constant")
+                elif w_cur > w_target:
+                    start = (w_cur - w_target) // 2
+                    arr = arr[:, start : start + w_target]
+
+                # add channel dim
+                if c_target == 1:
+                    arr = np.expand_dims(arr, -1)  # (h_target, w_target, 1)
+                else:
+                    # if model expects 3 channels, repeat the single channel
+                    arr = np.stack([arr] * c_target, axis=-1)
+
+                return np.expand_dims(arr.astype(np.float32), 0)  # add batch dim
+
+            elif len(target_shape) == 2:
+                # target (h, w) - no channel dimension
+                h_target, w_target = target_shape
+                h_cur, w_cur = arr.shape
+                # adapt like above
+                if h_cur < h_target:
+                    pad_top = (h_target - h_cur) // 2
+                    pad_bottom = h_target - h_cur - pad_top
+                    arr = np.pad(arr, ((pad_top, pad_bottom), (0, 0)), mode="constant")
+                elif h_cur > h_target:
+                    start = (h_cur - h_target) // 2
+                    arr = arr[start : start + h_target, :]
+                h_cur, w_cur = arr.shape
+                if w_cur < w_target:
+                    pad_left = (w_target - w_cur) // 2
+                    pad_right = w_target - w_cur - pad_left
+                    arr = np.pad(arr, ((0, 0), (pad_left, pad_right)), mode="constant")
+                elif w_cur > w_target:
+                    start = (w_cur - w_target) // 2
+                    arr = arr[:, start : start + w_target]
+                return np.expand_dims(arr.astype(np.float32), 0)
+
+            else:
+                # unknown input shape: return (1, n_mels, t, 1)
+                return np.expand_dims(np.expand_dims(arr, 0), -1)
+
+        def predict_cnn_internal(audio_path, model=None, meta=None):
+            """
+            Predict using a supplied keras model or by loading it if model is None.
+            Returns dict: {"prob_real":float, "prob_fake":float, "raw": <model_output>}
+            """
+            # load model if needed
+            if model is None:
+                model, meta = load_cnn_internal()
+
+            # read audio (prefer safe_read_audio if available)
+            if safe_read_audio is not None:
+                y_sr = safe_read_audio(audio_path, target_sr=None, mono=True)
+                if y_sr is None:
+                    raise RuntimeError("safe_read_audio failed to read audio")
+                y, sr = y_sr
+            else:
+                import librosa
+                y, sr = librosa.load(audio_path, sr=None, mono=True)
+
+            # short trim/pad: ensure non-empty
+            if len(y) == 0:
+                raise ValueError("Empty audio")
+
+            # compute mel
+            n_mels = int(meta.get("n_mels", 128))
+            fmax = int(meta.get("fmax", 8000))
+            S_db = _make_mel_spectrogram(y, sr, n_mels=n_mels, fmax=fmax)
+
+            # adapt to model input
+            X = _adapt_spectrogram_to_model_input(S_db, model)
+
+            # model predict (ensure float32)
+            preds = model.predict(X)
+            # Try to interpret predictions:
+            # If model outputs single sigmoid -> [ [p_fake] ] or [ [p_real] ]
+            pred_val = None
+            if isinstance(preds, (list, tuple)):
+                # some models return multiple outputs; choose first
+                preds = preds[0]
+
+            # preds shape: (1, n) or (1,)
+            try:
+                preds_arr = np.array(preds).reshape(preds.shape[0], -1)
+            except Exception:
+                preds_arr = np.array(preds)
+                if preds_arr.ndim == 0:
+                    preds_arr = preds_arr.reshape(1, 1)
+
+            # default interpretation:
+            # If binary classification with 1 output (sigmoid): preds_arr[0,0] = prob_fake (or prob_real) depending on training.
+            # If softmax with 2 outputs: preds_arr[0,1] is prob_real if class order [fake, real] or vice versa.
+            prob_real = None
+            prob_fake = None
+
+            if preds_arr.shape[1] == 1:
+                # single probability — we don't know whether it's prob_fake or prob_real.
+                p = float(preds_arr[0, 0])
+                # Heuristic: many models output prob of positive class, where positive=1 often mapped to "real".
+                # Try to use meta if available
+                map_positive = meta.get("positive_class", "real") if isinstance(meta, dict) else "real"
+                if map_positive == "fake":
+                    prob_fake = p
+                    prob_real = 1.0 - p
+                else:
+                    prob_real = p
+                    prob_fake = 1.0 - p
+            elif preds_arr.shape[1] >= 2:
+                # assume softmax [prob_fake, prob_real] or [prob_real, prob_fake]
+                # try to use meta.class_order if present
+                class_order = meta.get("class_order") if isinstance(meta, dict) else None
+                if class_order and isinstance(class_order, (list, tuple)) and len(class_order) >= 2:
+                    try:
+                        idx_real = class_order.index("real")
+                        idx_fake = class_order.index("fake")
+                        prob_real = float(preds_arr[0, idx_real])
+                        prob_fake = float(preds_arr[0, idx_fake])
+                    except Exception:
+                        # fallback: take index 1 as real
+                        prob_real = float(preds_arr[0, 1])
+                        prob_fake = float(preds_arr[0, 0])
+                else:
+                    # fallback: assume index 1 is real
+                    prob_real = float(preds_arr[0, 1])
+                    prob_fake = float(preds_arr[0, 0])
+
+            else:
+                # last-resort
+                prob_real = float(preds_arr.flatten()[0])
+                prob_fake = 1.0 - prob_real
+
+            return {"prob_real": float(prob_real), "prob_fake": float(prob_fake), "raw": preds}
+
+        # assign fallback functions
+        load_cnn_fn = load_cnn_internal
+        predict_cnn_file = predict_cnn_internal
+        CNN_AVAILABLE = True
+        cnn_import_error = None
+
+    except Exception as e:
+        # tensorflow not available or other error — CNN will be unavailable; capture traceback
+        cnn_import_error = traceback.format_exc()
+        load_cnn_fn = None
+        predict_cnn_file = None
+        CNN_AVAILABLE = False
+
+# If we have a loader, attempt to pre-load meta if possible (will be used later)
+if load_cnn_fn is not None:
+    try:
+        # load model (but don't keep heavy model in memory if not needed)
+        # We will just get meta if the loader returns meta
+        mload = None
+        try:
+            mload = load_cnn_fn()
+        except Exception:
+            mload = None
+        if isinstance(mload, tuple) and len(mload) >= 2:
+            # (model, meta)
+            _, cnn_meta = mload
+        else:
+            cnn_meta = {}
+    except Exception:
+        cnn_meta = {}
 
 # -------------------------
 # Page config & tiny CSS
@@ -124,19 +389,29 @@ def load_rf_model(path="models/rf_model.joblib"):
 
 @st.cache_resource
 def load_cnn_model_cached():
-    if not CNN_AVAILABLE:
+    """
+    Use the previously discovered load_cnn_fn (either project-provided or internal fallback).
+    Return (model, meta) or (None, None)
+    """
+    if load_cnn_fn is None:
         return None, None
     try:
-        return load_cnn_fn()
+        loaded = load_cnn_fn()
+        if isinstance(loaded, tuple):
+            return loaded[0], (loaded[1] if len(loaded) > 1 else {})
+        return loaded, {}
     except Exception:
+        # preserve trace in debug
+        if DEBUG and debug_box:
+            debug_box.text(traceback.format_exc())
         return None, None
 
 @st.cache_resource
 def load_ensemble_cached(path="models/ensemble_meta.joblib"):
-    if not ENSEMBLE_AVAILABLE and not os.path.exists(path):
+    if not os.path.exists(path):
         return None
     try:
-        return load_ensemble_fn(path)
+        return load_ensemble_fn(path) if load_ensemble_fn is not None else None
     except Exception:
         return None
 
@@ -207,29 +482,28 @@ with col_h1:
     logo_path = "images/ai.png"
     if os.path.exists(logo_path):
         st.image(logo_path, width=54)
-    # removed emoji for more professional look (small enhancement)
     st.markdown('<div class="header-title">Audio Deepfake Detector</div>', unsafe_allow_html=True)
     st.markdown('<div class="muted">Upload audio, run models (RF / CNN / Ensemble), compare results and export history.</div>', unsafe_allow_html=True)
 
 with col_h2:
-    # small right aligned developer badge under header area
     st.markdown(f"<div class='dev-badge'>Developed by {DEV_NAME}</div>", unsafe_allow_html=True)
 
 # Model availability snapshot
-# load models with an informative spinner message (small enhancement)
 with st.spinner("Loading models and checking availability..."):
     rf_model, rf_scaler = load_rf_model()
     cnn_model, cnn_meta = load_cnn_model_cached()
     ensemble_obj = load_ensemble_cached()
 
 st.sidebar.markdown("**Models available**")
+
 # Show CNN import errors visibly
 if cnn_import_error:
     st.sidebar.error("CNN module could not be loaded.")
     if DEBUG and debug_box:
         debug_box.text(cnn_import_error)
     else:
-        st.sidebar.caption("Enable debug logs to see the full exception.")
+        st.sidebar.caption("Enable debug logs to see the full exception. (Likely missing TensorFlow or wrong model path.)")
+
 st.sidebar.write(f"- RandomForest: {'✅' if rf_model is not None else '❌'}")
 st.sidebar.write(f"- CNN: {'✅' if cnn_model is not None else '❌'}")
 st.sidebar.write(f"- Ensemble: {'✅' if ensemble_obj is not None else '❌'}")
@@ -251,16 +525,12 @@ left_col, right_col = st.columns([1.4, 0.9])
 
 with left_col:
     uploaded = st.file_uploader("Upload audio file", type=["wav", "mp3", "flac", "ogg", "m4a"])
-    # quick actions
     st.markdown("**Quick tips:** trim long files to <30s for faster results.")
     run_btn = st.button("Run Prediction", key="run_btn")
-
-    # visual placeholder
     plot_placeholder = st.empty()
     audio_player_placeholder = st.empty()
 
 with right_col:
-    # status & model cards
     status_box = st.empty()
     st.markdown("### Results")
     rf_card = st.empty()
@@ -296,21 +566,16 @@ def show_probability_bar(container, prob_real, prob_fake, label_text="Result"):
     """Render a small card with metrics and progress bars."""
     prob_real = 0.0 if prob_real is None else prob_real
     prob_fake = 0.0 if prob_fake is None else prob_fake
-    # decide color based on label_text or prob_fake
     color = "#7BE495" if prob_fake < threshold else "#FF6B6B"
-    # Render
     with container.container():
         st.markdown(f"**{label_text}**")
         st.metric(label="Label", value=("Fake" if prob_fake >= threshold else "Real"))
         st.write(f"prob_real: **{prob_real:.4f}** — prob_fake: **{prob_fake:.4f}**")
-        # progress bars (two small)
         try:
             st.progress(int(prob_real * 100))
             st.progress(int(prob_fake * 100))
         except Exception:
-            # some streamlit versions don't support two progress bars sequentially; ignore if fails
             pass
-        # small spacer
         st.markdown("")
 
 # ----------------------
@@ -323,7 +588,7 @@ if run_btn:
         audio_path = save_temp_file(uploaded)
         try:
             with st.spinner("Loading audio and models..."):
-                # load audio
+                # load audio (prefer safe_read_audio)
                 if safe_read_audio is not None:
                     y_sr = safe_read_audio(audio_path, target_sr=None, mono=True)
                     if y_sr is None:
@@ -334,8 +599,6 @@ if run_btn:
                     import librosa
                     y, sr = librosa.load(audio_path, sr=None, mono=True)
 
-                # show audio player & waveform + mel
-                # If simpleaudio is available you might want local playback, otherwise always use browser playback
                 audio_player_placeholder.audio(audio_path)
                 fig = plot_wave_mel(y, sr, title_prefix="File")
                 plot_placeholder.pyplot(fig)
@@ -350,7 +613,6 @@ if run_btn:
                     elif ensemble_obj is not None:
                         chosen = "Ensemble"
 
-                # reset right side cards
                 rf_card.empty(); cnn_card.empty(); ens_card.empty(); comp_card.empty()
                 status_box.info("Running selected model(s)...")
 
@@ -370,19 +632,20 @@ if run_btn:
                             prob_real_rf, prob_fake_rf = rf_predict_proba(rf_model, rf_scaler, feats)
                             label_rf = "Fake" if prob_fake_rf >= threshold else "Real"
                             rf_res = {"prob_real": prob_real_rf, "prob_fake": prob_fake_rf, "label": label_rf}
-                            # show card
                             show_probability_bar(rf_card, prob_real_rf, prob_fake_rf, label_text="RandomForest")
-                            st.experimental_rerun() if False else None  # no-op to keep layout consistent
 
             # run CNN if requested / available
             cnn_res = None
             if chosen in ("CNN", "Both"):
                 if cnn_model is None or predict_cnn_file is None:
                     cnn_card.info("CNN model or helper not available.")
+                    if cnn_import_error and DEBUG and debug_box:
+                        debug_box.text(cnn_import_error)
                 else:
                     with st.spinner("Running CNN..."):
                         try:
-                            res = predict_cnn_file(audio_path, model=cnn_model, meta=cnn_meta)
+                            # if cnn_model already loaded from cache, pass it; otherwise predict_cnn_file will load it
+                            res = predict_cnn_file(audio_path, model=cnn_model, meta=cnn_meta) if cnn_model is not None else predict_cnn_file(audio_path)
                             prob_real_cnn = float(res.get("prob_real", 0.0))
                             prob_fake_cnn = float(res.get("prob_fake", 1.0 - prob_real_cnn))
                             label_cnn = "Fake" if prob_fake_cnn >= threshold else "Real"
@@ -412,20 +675,18 @@ if run_btn:
                             if DEBUG and debug_box:
                                 debug_box.text(traceback.format_exc())
 
-            # If Both requested, compute comparison + final label
+            # combine results for "Both"
             if chosen == "Both":
                 with st.spinner("Computing comparison..."):
-                    lines = []
                     if rf_res is not None:
-                        lines.append(f"RF → {rf_res['label']} (real:{rf_res['prob_real']:.3f}, fake:{rf_res['prob_fake']:.3f})")
+                        rf_text = f"RF → {rf_res['label']} (real:{rf_res['prob_real']:.3f}, fake:{rf_res['prob_fake']:.3f})"
                     else:
-                        lines.append("RF → N/A")
+                        rf_text = "RF → N/A"
                     if cnn_res is not None:
-                        lines.append(f"CNN → {cnn_res['label']} (real:{cnn_res['prob_real']:.3f}, fake:{cnn_res['prob_fake']:.3f})")
+                        cnn_text = f"CNN → {cnn_res['label']} (real:{cnn_res['prob_real']:.3f}, fake:{cnn_res['prob_fake']:.3f})"
                     else:
-                        lines.append("CNN → N/A")
+                        cnn_text = "CNN → N/A"
 
-                    # aggregated decision
                     if rf_res and cnn_res:
                         avg_real = (rf_res['prob_real'] + cnn_res['prob_real']) / 2.0
                         avg_fake = 1.0 - avg_real
@@ -441,7 +702,6 @@ if run_btn:
                         comp_card.info(f"Final: {final_label}")
                         st.session_state.history.append(make_history_row("Both", audio_path, prob_r, prob_f, final_label))
             else:
-                # single model history entries
                 if rf_res is not None and chosen == "RandomForest":
                     st.session_state.history.append(make_history_row("RandomForest", audio_path, rf_res['prob_real'], rf_res['prob_fake'], rf_res['label']))
                 if cnn_res is not None and chosen == "CNN":
@@ -468,7 +728,6 @@ with st.expander("📜 Prediction history (session)"):
         csv = df.to_csv(index=False).encode("utf-8")
         st.download_button("Download CSV", data=csv, file_name="prediction_history.csv", mime="text/csv")
         st.write("")  # spacing
-        # clear history button
         if st.button("Clear history"):
             st.session_state.history = []
             st.experimental_rerun()
