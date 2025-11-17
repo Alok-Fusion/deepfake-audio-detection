@@ -48,14 +48,20 @@ else:
     features_import_error = None
 
 # optional: cnn/ensemble helpers if present in your repo
+# -------------------------
+# CNN import handler (with error capture)
+# -------------------------
+cnn_import_error = None
 try:
     from cnn_predict import load_cnn as load_cnn_fn
     from cnn_predict import predict_file as predict_cnn_file
     CNN_AVAILABLE = True
-except Exception:
+except Exception as e:
     load_cnn_fn = None
     predict_cnn_file = None
     CNN_AVAILABLE = False
+    import traceback
+    cnn_import_error = traceback.format_exc()
 
 try:
     from ensemble_predict import load_ensemble as load_ensemble_fn
@@ -217,6 +223,13 @@ with st.spinner("Loading models and checking availability..."):
     ensemble_obj = load_ensemble_cached()
 
 st.sidebar.markdown("**Models available**")
+# Show CNN import errors visibly
+if cnn_import_error:
+    st.sidebar.error("CNN module could not be loaded.")
+    if DEBUG and debug_box:
+        debug_box.text(cnn_import_error)
+    else:
+        st.sidebar.caption("Enable debug logs to see the full exception.")
 st.sidebar.write(f"- RandomForest: {'✅' if rf_model is not None else '❌'}")
 st.sidebar.write(f"- CNN: {'✅' if cnn_model is not None else '❌'}")
 st.sidebar.write(f"- Ensemble: {'✅' if ensemble_obj is not None else '❌'}")
