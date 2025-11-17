@@ -1,0 +1,152 @@
+<!-- index.html -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Audio Deepfake Detector — Developed by Alok Kushwaha</title>
+  <style>
+    :root{--accent:#2b7cff;--good:#7BE495;--bad:#FF6B6B;--muted:#98a0a6}
+    body{font-family:Inter,Segoe UI,Roboto,Arial;margin:0;background:#0f1720;color:#e6eef8}
+    .wrap{max-width:980px;margin:28px auto;padding:22px;background:#0b1220;border-radius:10px;box-shadow:0 6px 30px rgba(0,0,0,.6)}
+    h1{margin:0 0 6px;font-size:22px}
+    p.lead{margin:4px 0 18px;color:var(--muted)}
+    .row{display:flex;gap:14px;align-items:center}
+    .left{flex:1}
+    .right{width:320px}
+    input[type=file]{width:100%}
+    button{background:var(--accent);color:white;border:0;padding:10px 14px;border-radius:8px;cursor:pointer}
+    .card{background:#08101a;padding:12px;border-radius:8px;margin-top:12px}
+    .result-label{font-size:18px;font-weight:700}
+    img.spect{max-width:100%;border-radius:6px;margin-top:8px}
+    footer{margin-top:18px;color:var(--muted);font-size:13px;text-align:center}
+    .probs{margin-top:8px;font-family:monospace;color:#cfe9ff}
+    .small{font-size:13px;color:var(--muted)}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <h1>🎙️ Audio Deepfake Detector</h1>
+        <p class="lead">Upload audio, run the RandomForest model (MFCC). Fast, local-friendly — developed by <strong>Alok Kushwaha</strong>.</p>
+      </div>
+      <div class="small">© <span id="year"></span> — Developed by <strong>Alok Kushwaha</strong></div>
+    </div>
+
+    <div class="row" style="margin-top:12px">
+      <div class="left">
+        <label class="small">Select audio file (wav/mp3/flac/ogg/m4a)</label>
+        <input id="file" type="file" accept=".wav,.mp3,.flac,.ogg,.m4a"/>
+        <div style="margin-top:8px">
+          <label class="small">Fake threshold (prob_fake ≥ threshold)</label>
+          <input id="threshold" type="range" min="0" max="1" step="0.01" value="0.50" style="width:60%"/>
+          <span id="thval" class="small">0.50</span>
+        </div>
+        <div style="margin-top:12px">
+          <button id="runBtn">▶️ Run Prediction</button>
+          <button id="clearBtn" style="background:#3a3f46;margin-left:8px">Clear</button>
+        </div>
+
+        <div id="status" class="card small" style="display:none;margin-top:12px"></div>
+
+        <div id="visual" class="card" style="display:none">
+          <div id="result" class="result-label">Result: <span id="labelText">—</span></div>
+          <div class="probs" id="probs">prob_real: —  — prob_fake: —</div>
+          <img id="spect" class="spect" alt="spectrogram" />
+        </div>
+      </div>
+
+      <div class="right">
+        <div class="card">
+          <strong>Quick tips</strong>
+          <ul class="small" style="padding-left:16px;margin-top:8px">
+            <li>Trim audio to &lt;30s for faster results</li>
+            <li>Model file should be at <code>models/rf_model.joblib</code></li>
+            <li>Backend: <code>/predict</code> accepts file + threshold</li>
+          </ul>
+        </div>
+
+        <div class="card" style="margin-top:12px">
+          <strong>Dev info</strong>
+          <div class="small" style="margin-top:8px">
+            Developed by <strong>Alok Kushwaha</strong><br/>
+            Local & web friendly — no Streamlit required.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <footer>
+      <div class="small">If the UI doesn't load from the server, open this file directly in your browser and set backend at <code>/predict</code>.</div>
+    </footer>
+  </div>
+
+<script>
+document.getElementById("year").innerText = new Date().getFullYear();
+const fileElt = document.getElementById("file");
+const runBtn = document.getElementById("runBtn");
+const status = document.getElementById("status");
+const visual = document.getElementById("visual");
+const labelText = document.getElementById("labelText");
+const probs = document.getElementById("probs");
+const spect = document.getElementById("spect");
+const threshold = document.getElementById("threshold");
+const thval = document.getElementById("thval");
+thval.innerText = threshold.value;
+threshold.addEventListener("input", ()=> thval.innerText = threshold.value);
+
+runBtn.addEventListener("click", async () => {
+  visual.style.display = "none";
+  status.style.display = "block";
+  status.innerText = "Preparing upload..."
+  if (!fileElt.files.length) { status.innerText = "Please choose a file first."; return; }
+  const f = fileElt.files[0];
+  const allowed = ['.wav','.mp3','.flac','.ogg','.m4a'];
+  if (!allowed.some(e => f.name.toLowerCase().endsWith(e))) {
+    status.innerText = "Unsupported file type.";
+    return;
+  }
+  status.innerText = "Uploading and predicting...";
+
+  try {
+    const form = new FormData();
+    form.append("file", f);
+    form.append("threshold", threshold.value);
+
+    const resp = await fetch("/predict?threshold=" + encodeURIComponent(threshold.value), {
+      method: "POST",
+      body: form
+    });
+
+    if (!resp.ok) {
+      const txt = await resp.text();
+      status.innerText = "Error: " + resp.status + " — " + txt;
+      return;
+    }
+    const data = await resp.json();
+    labelText.innerText = data.label;
+    probs.innerText = `prob_real: ${data.prob_real?.toFixed(4)}  —  prob_fake: ${data.prob_fake?.toFixed(4)}`;
+    if (data.spectrogram) {
+      spect.src = data.spectrogram;
+      spect.style.display = "block";
+    } else {
+      spect.style.display = "none";
+    }
+    visual.style.display = "block";
+    status.style.display = "none";
+  } catch (e) {
+    status.innerText = "Request failed: " + e;
+    console.error(e);
+  }
+});
+
+document.getElementById("clearBtn").addEventListener("click", ()=>{
+  fileElt.value = "";
+  visual.style.display = "none";
+  status.style.display = "none";
+  spect.src = "";
+});
+</script>
+</body>
+</html>
