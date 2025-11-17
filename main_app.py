@@ -1,6 +1,8 @@
 # app_streamlit.py (upgraded UI) — shows "Developed by Alok Kushwaha" prominently
 import io
+import logging
 import os
+import traceback
 from datetime import datetime
 from tempfile import NamedTemporaryFile
 
@@ -10,9 +12,27 @@ import numpy as np
 import streamlit as st
 
 # -------------------------
+# Optional C-extension audio playback (guarded)
+# -------------------------
+# simpleaudio is a C-extension that often requires system libs (alsa) to build.
+# Make it optional in cloud environments where those headers are unavailable.
+try:
+    import simpleaudio as sa
+    _HAS_SIMPLEAUDIO = True
+except Exception:
+    sa = None
+    _HAS_SIMPLEAUDIO = False
+
+# -------------------------
 # Who developed this app
 # -------------------------
 DEV_NAME = "Alok Kushwaha"
+
+# -------------------------
+# Tiny logging / debug helpers
+# -------------------------
+logger = logging.getLogger("deepfake_app")
+logger.addHandler(logging.NullHandler())
 
 # -------------------------
 # Try to import project helpers (fall back gracefully)
@@ -66,6 +86,23 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+# ----------------------
+# Sidebar: settings, debug toggle & model snapshot
+# ----------------------
+st.sidebar.header("Settings & Models")
+model_choice = st.sidebar.radio("Model", options=["Auto", "RandomForest", "CNN", "Ensemble", "Both"], index=0)
+threshold = st.sidebar.slider("Fake threshold (prob_fake ≥ threshold)", 0.0, 1.0, 0.50, 0.01)
+st.sidebar.markdown("---")
+
+# Debug toggle (small enhancement)
+DEBUG = st.sidebar.checkbox("Enable debug logs", value=False)
+if DEBUG:
+    # show a small logging area
+    st.sidebar.markdown("**Debug logs:**")
+    debug_box = st.sidebar.empty()
+else:
+    debug_box = None
 
 # ----------------------
 # Helpers & model loads
@@ -164,23 +201,21 @@ with col_h1:
     logo_path = "images/ai.png"
     if os.path.exists(logo_path):
         st.image(logo_path, width=54)
-    st.markdown('<div class="header-title">🎙️ Audio Deepfake Detector</div>', unsafe_allow_html=True)
+    # removed emoji for more professional look (small enhancement)
+    st.markdown('<div class="header-title">Audio Deepfake Detector</div>', unsafe_allow_html=True)
     st.markdown('<div class="muted">Upload audio, run models (RF / CNN / Ensemble), compare results and export history.</div>', unsafe_allow_html=True)
 
 with col_h2:
     # small right aligned developer badge under header area
     st.markdown(f"<div class='dev-badge'>Developed by {DEV_NAME}</div>", unsafe_allow_html=True)
 
-# settings in sidebar
-st.sidebar.header("Settings & Models")
-model_choice = st.sidebar.radio("Model", options=["Auto", "RandomForest", "CNN", "Ensemble", "Both"], index=0)
-threshold = st.sidebar.slider("Fake threshold (prob_fake ≥ threshold)", 0.0, 1.0, 0.50, 0.01)
-st.sidebar.markdown("---")
-
 # Model availability snapshot
-rf_model, rf_scaler = load_rf_model()
-cnn_model, cnn_meta = load_cnn_model_cached()
-ensemble_obj = load_ensemble_cached()
+# load models with an informative spinner message (small enhancement)
+with st.spinner("Loading models and checking availability..."):
+    rf_model, rf_scaler = load_rf_model()
+    cnn_model, cnn_meta = load_cnn_model_cached()
+    ensemble_obj = load_ensemble_cached()
+
 st.sidebar.markdown("**Models available**")
 st.sidebar.write(f"- RandomForest: {'✅' if rf_model is not None else '❌'}")
 st.sidebar.write(f"- CNN: {'✅' if cnn_model is not None else '❌'}")
@@ -193,6 +228,8 @@ st.sidebar.markdown(f"**Built & maintained by:** {DEV_NAME}")
 if features_import_error:
     st.sidebar.error("features.py import failed. Some functionality will be disabled.")
     st.sidebar.caption(features_import_error)
+    if DEBUG and debug_box:
+        debug_box.text(features_import_error)
 
 # ----------------------
 # Main UI: uploader + action + visuals
@@ -203,7 +240,7 @@ with left_col:
     uploaded = st.file_uploader("Upload audio file", type=["wav", "mp3", "flac", "ogg", "m4a"])
     # quick actions
     st.markdown("**Quick tips:** trim long files to <30s for faster results.")
-    run_btn = st.button("▶️ Run Prediction", key="run_btn")
+    run_btn = st.button("Run Prediction", key="run_btn")
 
     # visual placeholder
     plot_placeholder = st.empty()
@@ -285,6 +322,7 @@ if run_btn:
                     y, sr = librosa.load(audio_path, sr=None, mono=True)
 
                 # show audio player & waveform + mel
+                # If simpleaudio is available you might want local playback, otherwise always use browser playback
                 audio_player_placeholder.audio(audio_path)
                 fig = plot_wave_mel(y, sr, title_prefix="File")
                 plot_placeholder.pyplot(fig)
@@ -339,6 +377,8 @@ if run_btn:
                             show_probability_bar(cnn_card, prob_real_cnn, prob_fake_cnn, label_text="CNN")
                         except Exception as e:
                             cnn_card.error(f"CNN failed: {e}")
+                            if DEBUG and debug_box:
+                                debug_box.text(traceback.format_exc())
 
             # run Ensemble if requested
             ens_res = None
@@ -356,6 +396,8 @@ if run_btn:
                             show_probability_bar(ens_card, prob_real_e, prob_fake_e, label_text="Ensemble")
                         except Exception as e:
                             ens_card.error(f"Ensemble failed: {e}")
+                            if DEBUG and debug_box:
+                                debug_box.text(traceback.format_exc())
 
             # If Both requested, compute comparison + final label
             if chosen == "Both":
@@ -397,6 +439,8 @@ if run_btn:
             status_box.success("Prediction finished.")
         except Exception as e:
             status_box.error(f"Prediction failed: {e}")
+            if DEBUG and debug_box:
+                debug_box.text(traceback.format_exc())
 
 # ----------------------
 # History & export
