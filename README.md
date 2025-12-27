@@ -194,52 +194,6 @@ git commit -m "Improve GUI: Run Both comparison and colored history"
 git push origin feature/gui-improve
 ```
 
-### Useful tips
-
-* Keep small, focused commits and descriptive messages.
-* Use feature branches for new changes and open a pull request (PR) for review.
-* Tag releases:
-
-```bash
-git tag -a v0.1 -m "Initial release"
-git push --tags
-```
-
-### .gitignore (recommended)
-
-Add a `.gitignore` at repo root with:
-
-```
-venv/
-__pycache__/
-*.pyc
-models/
-*.h5
-*.joblib
-*.log
-.DS_Store
-```
-
-> Note: You may want to keep a small `models/.gitkeep` if you want the directory tracked.
-
----
-
-## ✨ Tips & next steps
-
-* Improve accuracy: add delta-MFCCs, chroma, spectral-contrast, augmentation
-* Try ensemble stacking (meta-classifier) to combine RF + CNN
-* Add clickable history rows to replay saved comparisons
-* Add a GUI button to train the CNN in background (if you want)
-
----
-
-## 📄 License & contact
-
-* Add a LICENSE (MIT/Apache) if you intend to share the repo publicly.
-* Want help adding features (Train CNN button, clickable history rows, or a batch-export)? Reply and I’ll provide the code patch.
-
----
-
 Made with ❤️ — enjoy building and experimenting with local audio deepfake detection!
 
 ```
