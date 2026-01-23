@@ -197,8 +197,3 @@ git push origin feature/gui-improve
 Made with ❤️ — enjoy building and experimenting with local audio deepfake detection!
 
 ```
-
----
-
-If you want the README as plain `readme.txt` instead (text-only), or a smaller one-page variant for a GitHub project front page, tell me which and I’ll generate it.
-```
